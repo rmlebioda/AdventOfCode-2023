@@ -11,6 +11,7 @@ public class Map
     /// Map tiles with indexes [Y][X]
     /// </summary>
     public Tile[][] Tiles { get; }
+    public nint[][]? LoopVisits { get; private set; }
 
     public Map(string map)
     {
@@ -78,16 +79,18 @@ public class Map
     /// </summary>
     public nint GetFurthestPointFromStart()
     {
-        var visitedTiles = Create2DArray<nint>(Y, X);
-        Fill2DArray(visitedTiles, NotVisitedTileValue);
+        if (LoopVisits is not null)
+            return LoopVisits.Max(seq => seq.Max());
+        LoopVisits = Create2DArray<nint>(Y, X);
+        Fill2DArray(LoopVisits, NotVisitedTileValue);
         var startingPoint = GetStartingPosition();
         var tilesToVisit = new List<Point> { startingPoint };
         nint turns = 0;
-        visitedTiles[startingPoint.Y][startingPoint.X] = turns;
+        LoopVisits[startingPoint.Y][startingPoint.X] = turns;
 
         while (tilesToVisit.Any())
         {
-            tilesToVisit = Visit(tilesToVisit, visitedTiles, turns).ToList();
+            tilesToVisit = Visit(tilesToVisit, turns).ToList();
 
             if (tilesToVisit.Any())
                 turns++;
@@ -114,39 +117,38 @@ public class Map
     /// Visits sets of points and returns new points to be visited on next turn
     /// </summary>
     /// <param name="points">Points to visit</param>
-    /// <param name="visitedTiles">Array containing visited points</param>
     /// <param name="fillValue">Fill value for visiting points in array</param>
     /// <returns>New points to visit on next turn</returns>
-    public IEnumerable<Point> Visit(IEnumerable<Point> points, IntPtr[][] visitedTiles, IntPtr fillValue)
+    public IEnumerable<Point> Visit(IEnumerable<Point> points, IntPtr fillValue)
     {
         foreach (var point in points)
         {
             // we are checking, if pipes on west, south, north or east are connected with current point pipe
-            if (IsConnected(point, VisitDirection.Left) && visitedTiles[point.Y][point.X - 1] != NotVisitedTileValue)
+            if (IsConnected(point, VisitDirection.Left) && LoopVisits![point.Y][point.X - 1] == NotVisitedTileValue)
             {
                 var newPoint = new Point(point.X - 1, point.Y);
-                visitedTiles[newPoint.Y][newPoint.X] = fillValue;
+                LoopVisits![newPoint.Y][newPoint.X] = fillValue;
                 yield return newPoint;
             }
 
-            if (IsConnected(point, VisitDirection.Right) && visitedTiles[point.Y][point.X + 1] != NotVisitedTileValue)
+            if (IsConnected(point, VisitDirection.Right) && LoopVisits![point.Y][point.X + 1] == NotVisitedTileValue)
             {
                 var newPoint = new Point(point.X + 1, point.Y);
-                visitedTiles[newPoint.Y][newPoint.X] = fillValue;
+                LoopVisits![newPoint.Y][newPoint.X] = fillValue;
                 yield return newPoint;
             }
 
-            if (IsConnected(point, VisitDirection.North) && visitedTiles[point.Y + 1][point.X] != NotVisitedTileValue)
+            if (IsConnected(point, VisitDirection.North) && LoopVisits![point.Y - 1][point.X] == NotVisitedTileValue)
             {
-                var newPoint = new Point(point.X, point.Y + 1);
-                visitedTiles[newPoint.Y][newPoint.X] = fillValue;
+                var newPoint = new Point(point.X, point.Y - 1);
+                LoopVisits![newPoint.Y][newPoint.X] = fillValue;
                 yield return newPoint;
             }
 
-            if (IsConnected(point, VisitDirection.South) && visitedTiles[point.Y - 1][point.X] != NotVisitedTileValue)
+            if (IsConnected(point, VisitDirection.South) && LoopVisits![point.Y + 1][point.X] == NotVisitedTileValue)
             {
                 var newPoint = new Point(point.X, point.Y + 1);
-                visitedTiles[newPoint.Y][newPoint.X] = fillValue;
+                LoopVisits![newPoint.Y][newPoint.X] = fillValue;
                 yield return newPoint;
             }
         }
@@ -173,7 +175,7 @@ public class Map
         {
             return IsConnectedToDown(point);
         }
-        
+
 
         throw new ArgumentException("Invalid visit direction: " + visitDirection);
     }
@@ -191,7 +193,7 @@ public class Map
 
         return false;
     }
-    
+
     private bool IsConnectedToRight(Point point)
     {
         if (point.X >= (X - 1))
@@ -205,7 +207,7 @@ public class Map
 
         return false;
     }
-    
+
     private bool IsConnectedToUp(Point point)
     {
         if (point.Y <= 0)
@@ -219,7 +221,12 @@ public class Map
 
         return false;
     }
-    
+
+    private bool IsPartOfLoop(Point p)
+    {
+        return LoopVisits![p.Y][p.X] != NotVisitedTileValue;
+    }
+
     private bool IsConnectedToDown(Point point)
     {
         if (point.Y >= (Y - 1))
@@ -232,5 +239,190 @@ public class Map
             return true;
 
         return false;
+    }
+
+    /// <summary>
+    /// Retrieves amount of tiles enclosed by loop. Includes non-connected pipes.
+    /// </summary>
+    public int GetTilesEnclosedByLoop()
+    {
+        if (LoopVisits == null)
+            _ = GetFurthestPointFromStart();
+        
+        int tiles = 0;
+        for (int y = 0; y < Y; y++)
+        {
+            for (int x = 0; x < X; x++)
+            {
+                if ((Tiles[y][x] != Tile.None && LoopVisits![y][x] == NotVisitedTileValue) && GetCrossingPointsFromLeftEdge(new Point(x, y)) % 2 == 1)
+                    tiles++;
+            }
+        }
+
+        return tiles;
+    }
+
+    private int GetCrossingPointsFromLeftEdge(Point point)
+    {
+        int result = 0;
+        // we store visit direction to know, if we are continuing crossing a wall and from which direction (north/south)
+        VisitDirection? wallVisitDirection = null;
+        for (int x = 0; x < point.X; x++)
+        {
+            var cp = new Point(x, point.Y);
+            var tileValue = Tiles[point.Y][x];
+            if (tileValue == Tile.StartingPosition)
+                tileValue = FindValidTileForPoint(new Point(x, point.Y));
+
+            if (tileValue == Tile.VerticalPipe && IsPartOfLoop(cp))
+                result++;
+            else if (tileValue == Tile.NorthEastPipe && IsPartOfLoop(cp))
+                wallVisitDirection = VisitDirection.North;
+            else if (tileValue == Tile.SouthEastPipe && IsPartOfLoop(cp))
+                wallVisitDirection = VisitDirection.South;
+            else if (tileValue == Tile.NorthWestPipe && IsPartOfLoop(cp))
+            {
+                if (wallVisitDirection == VisitDirection.North)
+                    result += 2;
+                else
+                    result++;
+                wallVisitDirection = null;
+            }
+            else if (tileValue == Tile.SouthWestPipe && IsPartOfLoop(cp))
+            {
+                if (wallVisitDirection == VisitDirection.South)
+                    result += 2;
+                else
+                    result++;
+                wallVisitDirection = null;
+            }
+        }
+
+        return result;
+    }
+
+    private Tile FindValidTileForPoint(Point point)
+    {
+        if (point.X > 0 &&
+            ((Tile[]) [Tile.NorthEastPipe, Tile.SouthEastPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X - 1]))
+        {
+            return FindValidTileForPointFromWest(point);
+        }
+        
+        if (point.X < (X - 1) &&
+            ((Tile[]) [Tile.NorthWestPipe, Tile.SouthWestPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X + 1]))
+        {
+            return FindValidTileForPointFromEast(point);
+        }
+        
+        if (point.Y > 0 &&
+            ((Tile[]) [Tile.SouthEastPipe, Tile.SouthWestPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y - 1][point.X]))
+        {
+            return FindValidTileForPointFromNorth(point);
+        }
+        
+        if (point.Y < (Y - 1) &&
+            ((Tile[]) [Tile.NorthEastPipe, Tile.NorthWestPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y + 1][point.X]))
+        {
+            return FindValidTileForPointFromSouth(point);
+        }
+        
+        throw new InvalidOperationException();
+    }
+
+    private Tile FindValidTileForPointFromWest(Point point)
+    {
+        if (point.X < (X - 1) && ((Tile[]) [Tile.NorthWestPipe, Tile.SouthWestPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X + 1]))
+        {
+            return Tile.HorizontalPipe;
+        }
+
+        if (point.Y < (Y - 1) && ((Tile[]) [Tile.NorthEastPipe, Tile.NorthWestPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y + 1][point.X]))
+        {
+            return Tile.SouthWestPipe;
+        }
+
+        if (point.Y > 0 && ((Tile[]) [Tile.SouthEastPipe, Tile.SouthWestPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y - 1][point.X]))
+        {
+            return Tile.NorthWestPipe;
+        }
+
+        throw new InvalidOperationException();
+    }
+    
+    private Tile FindValidTileForPointFromEast(Point point)
+    {
+        if (point.X > 0 && ((Tile[]) [Tile.NorthEastPipe, Tile.SouthEastPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X - 1]))
+        {
+            return Tile.HorizontalPipe;
+        }
+
+        if (point.Y < (Y - 1) && ((Tile[]) [Tile.NorthEastPipe, Tile.NorthWestPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y + 1][point.X]))
+        {
+            return Tile.SouthEastPipe;
+        }
+
+        if (point.Y > 0 && ((Tile[]) [Tile.SouthEastPipe, Tile.SouthWestPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y - 1][point.X]))
+        {
+            return Tile.NorthEastPipe;
+        }
+
+        throw new InvalidOperationException();
+    }
+
+    private Tile FindValidTileForPointFromNorth(Point point)
+    {
+        if (point.Y < (Y - 1) && ((Tile[]) [Tile.NorthWestPipe, Tile.NorthEastPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y + 1][point.X]))
+        {
+            return Tile.VerticalPipe;
+        }
+
+        if (point.X < (X - 1) && ((Tile[]) [Tile.NorthWestPipe, Tile.SouthWestPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X + 1]))
+        {
+            return Tile.NorthEastPipe;
+        }
+
+        if (point.X > 0 && ((Tile[]) [Tile.NorthEastPipe, Tile.SouthEastPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X - 1]))
+        {
+            return Tile.NorthWestPipe;
+        }
+
+        throw new InvalidOperationException();
+    }
+    
+    private Tile FindValidTileForPointFromSouth(Point point)
+    {
+        if (point.Y > 0 && ((Tile[]) [Tile.SouthEastPipe, Tile.SouthWestPipe, Tile.VerticalPipe])
+            .Contains(Tiles[point.Y - 1][point.X]))
+        {
+            return Tile.VerticalPipe;
+        }
+
+        if (point.X < (X - 1) && ((Tile[]) [Tile.NorthWestPipe, Tile.SouthWestPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X + 1]))
+        {
+            return Tile.SouthEastPipe;
+        }
+
+        if (point.X > 0 && ((Tile[]) [Tile.SouthEastPipe, Tile.NorthEastPipe, Tile.HorizontalPipe])
+            .Contains(Tiles[point.Y][point.X - 1]))
+        {
+            return Tile.SouthWestPipe;
+        }
+
+        throw new InvalidOperationException();
     }
 }
