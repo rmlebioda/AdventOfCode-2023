@@ -11,4 +11,25 @@ public static class IEnumerableExtensions
             .GroupBy(x => x.groupIndex)
             .Select(g => g.Select(x => x.v));
     }
+
+    public static IEnumerable<int> FindIndexes<T>(this IList<T> list, Predicate<T> match)
+    {
+        if (list is null)
+        {
+            throw new ArgumentNullException(nameof(list));
+        }
+
+        if (match is null)
+        {
+            throw new ArgumentNullException(nameof(match));
+        }
+        
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (match(list[i]))
+            {
+                yield return i;
+            }
+        }
+    }
 }
